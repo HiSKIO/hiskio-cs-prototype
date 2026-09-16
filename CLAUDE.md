@@ -28,16 +28,18 @@ Python 3.11 + FastAPI + SQLite + **模型無關 LLM 層**（可插拔：直連 A
 
 ## 知識庫更新
 
-用 `/kb-review` skill 啟動完整流程（KB / FAQ / 最近問答審視，互動式更新）。
+用 `/kb-review` skill 啟動完整流程（KB / FAQ 原稿審視，互動式更新）。
 使用者只需丟資料 + 確認統籌文件，其他全自動。
 
 **遠端知識來源（#7，2026-07-08 起）**：設 `HISUPPORT_KB_URL`（＋`HISUPPORT_KB_KEY`）後，KB 從 HiSupport 說明中心「啟用中」文章合併進來（`core/kb_remote.py`，`hs_` 前綴、落地 `data/kb_remote*`）；未設＝純本地、行為不變。更新全靠事件（開機對齊＋HiSupport 門鈴 `POST /api/kb/refresh`），**禁止加定時輪詢**（Adam 拍板）。
+**對話語料（次級知識根，2026-09-15 起）**：同一個 `HISUPPORT_KB_URL`／金鑰、同一顆門鈴 `POST /api/kb/refresh`，但走自己的 sync 與索引（`core/corpus_remote.py`，落地 `data/corpus*`）。語料同步失敗不擋文章同步（文章是權威知識）。**正式機同樣要設持久磁碟**：`CORPUS_INDEX_PATH`／`CORPUS_DIR`／`CORPUS_STATE_PATH` 指向 `/data`，理由同下。
 **正式機落地檔要放持久磁碟**（2026-07-11 實抓根治）：Railway 已設 `KB_REMOTE_INDEX_PATH=/data/kb_remote_index.json`、`KB_REMOTE_DIR=/data/kb_remote`、`KB_REMOTE_STATE_PATH=/data/kb_remote_state.json`——否則每次部署容器全新、索引卡全重建（34 篇×LLM 約 1~2 分鐘），期間機器人「零知識」亂轉真人。放 /data 後重部署秒回暖（已實測：部署完成下一秒即答對）。
 
-### 知識來源地圖（2026-07-11 更新：FAQ 已退役，單一根＝說明中心文章）
-機器人對外講的每句話，來源只有**兩**種，衝突時**以 Adam 最新的話為準**：
-1. **說明中心文章（KB，唯一知識根）**——Adam 在 HiSupport 後台管理，門鈴自動同步，改後台=機器人跟著變。含「隱藏＋機器人可用」的營運文章（學員看不到、機器人答得出，如觀看期限 文35、客服時效 文36）。
-2. **後台可調設定**——人設、機器人名字、轉真人固定訊息、歡迎語等，Adam 在 HiSupport 後台直接改。
+### 知識來源地圖（2026-09-15 更新：知識根從一個變兩個，見 HiSupport `docs/adr/0003-hibot-two-knowledge-roots.md`）
+機器人對外講的每句話，來源只有**三**種，衝突時**以 Adam 最新的話為準**：
+1. **說明中心文章（KB，權威知識根）**——Adam 在 HiSupport 後台管理，門鈴自動同步，改後台=機器人跟著變。含「隱藏＋機器人可用」的營運文章（學員看不到、機器人答得出，如觀看期限 文35、客服時效 文36）。
+2. **對話語料（次級知識根，2026-09-15 起）**——客服在 HiSupport 收件匣逐段勾選「納入 HiBot 語料」的**已結案**對話逐字紀錄（`core/corpus_remote.py`，`hsc_` 前綴、落地 `data/corpus*`）。它是「某個客服在某個時間點講過的話」，**永遠次於第 1 項**：同一個問題文章答得出來就用文章，衝突一律以文章為準。這條規則寫在 `prompts/brain_system.txt` 的語料區塊裡——v8 一顆腦一次決定，程式端沒有降權的餘地，**改分診腦 prompt 時記得它在那裡**。語料的 `url` 恆為 None，所以天生進不了給訪客看的 `sources`。
+3. **後台可調設定**——人設、機器人名字、轉真人固定訊息、歡迎語等，Adam 在 HiSupport 後台直接改。
 
 歷史沿革：`data/faq.json` 原為人工維護的 22 條獨立標準答案（曾與後台設定分岔出「客服時效 20/24 小時」事故）。**2026-07-11 Adam 拍板補完 7/7 原案「收斂成文章一種」**：22 條逐一核對（20 條文章本就涵蓋、2 條缺口建成隱藏文章）後清空。FAQ 機制程式（faq_matcher／faq_responder／brain 空表容錯）保留備用不拆；測試用 fixture（`FAQ_PATH`）。同一資訊若同時存在文章與後台設定（如客服時效），改任一邊都要檢查另一邊有沒有跟上。
 

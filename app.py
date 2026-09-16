@@ -94,11 +94,17 @@ def _startup() -> None:
 
     # 遠端知識來源(#7):設了 HISUPPORT_KB_URL 才啟用;開機對齊一次(背景跑,不擋啟動、失敗沿用最後快取)。
     # 之後的更新全靠 HiSupport 門鈴(POST /api/kb/refresh)——**沒有定時輪詢**(Adam 2026-07-08 拍板)。
-    from core import kb_remote
+    from core import corpus_remote, kb_remote
     if kb_remote.enabled():
         import threading
         threading.Thread(target=kb_remote.sync, name="kb-remote-boot-sync", daemon=True).start()
         logger.info("遠端知識來源已啟用:%s(開機對齊已排入背景)", os.getenv("HISUPPORT_KB_URL"))
+    # 對話語料(次級知識根,2026-09-15):同一個 HiSupport、同一顆門鈴,但走自己的索引與游標。
+    # 各自一條執行緒:語料同步壞掉不該連帶拖住說明中心文章的開機對齊。
+    if corpus_remote.enabled():
+        import threading
+        threading.Thread(target=corpus_remote.sync, name="corpus-boot-sync", daemon=True).start()
+        logger.info("對話語料來源已啟用(開機對齊已排入背景)")
 
 
 class NewSessionReq(BaseModel):
@@ -233,17 +239,28 @@ def set_config(req: ConfigReq):
 
 @app.post("/api/kb/refresh")
 def kb_refresh():
-    """HiSupport 門鈴(#7):說明中心文章有異動時打這裡 → 立即增量同步遠端知識。
+    """HiSupport 門鈴(#7):說明中心文章或對話語料有異動時打這裡 → 立即增量同步。
 
     也是後台「立即同步知識」按鈕的落點。零輪詢設計:更新只由本門鈴+開機對齊觸發。
     金鑰把關走全域中介層(設 HIBOT_API_KEY 後 /api/* 一律要 Bearer)。
+
+    **一顆門鈴管兩個知識根**(2026-09-15):HiSupport 那端不區分是文章變了還是語料變了,
+    兩邊都各自帶增量游標,重拉沒變的東西是零成本的(游標會讓它回空)。多開一顆門鈴只會
+    讓兩端多一組要對齊的約定,換不到任何東西。
+
+    語料同步失敗不擋整顆門鈴:文章是權威知識,不能因為次級來源壞掉就拒絕更新它。
     """
-    from core import kb_remote
+    from core import corpus_remote, kb_remote
     if not kb_remote.enabled():
         raise HTTPException(status_code=409, detail="遠端知識來源未啟用(未設 HISUPPORT_KB_URL)")
     stats = kb_remote.sync()
     if stats.get("error"):
         raise HTTPException(status_code=502, detail=f"同步失敗(沿用最後快取):{stats['error']}")
+    if corpus_remote.enabled():
+        corpus_stats = corpus_remote.sync()
+        stats = {**stats, "corpus": corpus_stats}
+        if corpus_stats.get("error"):
+            logger.warning("語料同步失敗(沿用最後快取,不擋文章同步):%s", corpus_stats["error"])
     return stats
 
 

@@ -75,9 +75,31 @@ def _kb_cards() -> str:
 
 
 @lru_cache(maxsize=1)
+def _corpus_cards() -> str:
+    """對話語料的索引卡(**次級**知識根)。沒有語料＝明講一句,不要讓腦以為這區塊壞了。
+
+    跟 KB 卡分開兩個區塊、不混在一起,是這整件事的關鍵:混在一起的話,
+    「某個客服去年講過的舊政策」就會跟「現行的說明中心文章」平起平坐,
+    而分診腦沒有任何依據能分辨哪張卡比較可信。"""
+    index = kb_indexer._load_corpus_index()
+    if not index:
+        return "（目前沒有對話語料）"
+    lines = []
+    for item in index:
+        kqs = "、".join(item.get("key_questions", []))
+        lines.append(
+            f"- {item['id']}｜{item.get('title', '')}\n"
+            f"  摘要：{item.get('summary', '')}\n"
+            f"  常見問法：{kqs}"
+        )
+    return "\n".join(lines)
+
+
+@lru_cache(maxsize=1)
 def _system_prompt() -> str:
     """規則+資料表烤成單一 system 字串(靜態 → 可吃 prompt cache)。"""
-    return _SYSTEM_TPL.format(faq_table=_faq_table(), kb_cards=_kb_cards())
+    return _SYSTEM_TPL.format(
+        faq_table=_faq_table(), kb_cards=_kb_cards(), corpus_cards=_corpus_cards())
 
 
 def _format_intent_log(intent_log: list[dict]) -> str:
@@ -150,7 +172,8 @@ def decide(state: dict, user_message: str) -> dict:
 
     # ── 幻覺編號白名單驗證(規格 §14-2)──
     valid_faq_ids = {f["id"] for f in faq_matcher._load_faq()}
-    valid_kb_ids = {k["id"] for k in kb_indexer._load_kb_index()}
+    # 兩個知識根的編號都算合法(語料卡的 hsc_ 也要能挑),否則腦挑了語料會被當幻覺剔掉
+    valid_kb_ids = kb_indexer.all_valid_ids()
 
     faq_id = parsed.get("faq_id")
     if faq_id is not None and faq_id not in valid_faq_ids:
@@ -233,7 +256,8 @@ def decide(state: dict, user_message: str) -> dict:
 
 
 def reset_caches() -> None:
-    """KB/FAQ 更新後(或測試)清快取。"""
+    """KB/FAQ/語料 更新後(或測試)清快取。"""
     _faq_table.cache_clear()
     _kb_cards.cache_clear()
+    _corpus_cards.cache_clear()
     _system_prompt.cache_clear()
