@@ -1,10 +1,10 @@
 # KB Review — 知識庫審視與更新
 
-當使用者說「更新知識庫」、「整理 KB」、「審視最近問答」、「kb review」、「kb-review」或類似語意時，執行以下流程。
+當使用者說「更新知識庫」、「整理 KB」、「kb review」、「kb-review」或類似語意時，執行以下流程。
 
 ## 設計原則
 
-- **三類更新一次處理完**：原稿改動、FAQ 更新、最近問答歸納
+- **兩類更新一次處理完**：原稿改動、FAQ 更新
 - **使用者只做確認，不碰系統檔**：所有原稿分類、檔名、mapping、備份、索引、重啟都由 Claude 自動處理
 - **單一文件確認**：所有變更整理進一份統籌文件，使用者一次回覆即可
 - **任何取代必備份**：被覆蓋的舊檔自動搬進 `_archive/`，可隨時還原
@@ -56,7 +56,7 @@
 
 ## Step 1：掃描所有來源
 
-並行掃四個來源：
+並行掃三個來源：
 
 1. **Step 0 帶進來的新檔案**（最高優先）
 2. **`data/kb_source/` vs `data/kb/` 比對**
@@ -65,12 +65,17 @@
 3. **`data/faq_source/` vs `data/faq.json` 比對**
    - 配合 `data/faq_mapping.md`
    - 同上邏輯
-4. **最近 30 天 SQLite 對話歸納**
-   - 從 `data/prototype.db` 撈 `sessions.chat_history`
-   - 篩選條件（任一）：
-     - `intent_log` 含 `confirmed_resolved` 的對話
-     - 沒命中 FAQ（`faq_context.matched_faq_id` 為 null）但走 RAG 後解決 → 高優先
-   - 用 Haiku 歸納成 FAQ 候選草稿（含 `question_patterns` / `core_steps` / `fallback_message`）
+> **「最近問答歸納」這一步已於 2026-09-15 移除。** 原本它從 `data/prototype.db` 的
+> `sessions.chat_history` 撈最近 30 天對話、歸納成 FAQ 候選。移除的兩個理由：
+> ① 它讀的是 HiBot 自存的對話，違反「對話一律歸 HiSupport、HiBot 不自持久化」的拍板；
+> ② 它產出的是 FAQ 候選，而 FAQ 已於 2026-07-11 退役。
+>
+> 這件事現在由**對話語料**接手，而且方向是相反的：由客服在 HiSupport 收件匣逐段勾選
+> 「納入 HiBot 語料」，HiBot 透過 `/api/hibot/transcripts` 拉回來、自動生索引卡
+> （`core/corpus_remote.py`），不需要人在這個 skill 裡審。語料是次級知識，
+> 永遠不會蓋過說明中心文章。
+>
+> `sessions.chat_history` 本身保留——多輪對話的工作狀態靠它，但它不再是知識來源。
 
 ---
 
@@ -108,14 +113,7 @@
 - 更新：faq_0NN ...
 - 刪除：faq_0NN ...
 
-## D. 從最近問答歸納的 FAQ 候選
-- [ ] faq_0NN 候選：<主題>
-      question_patterns: [...]
-      core_steps: [...]
-      fallback_message: ...
-      ⚠️ 此項由 AI 推測，core_steps 請務必審過
-
-## E. 備份的舊檔
+## D. 備份的舊檔
 - `data/kb_source/<舊檔>.md` → `data/kb_source/_archive/<舊檔>_YYYY-MM-DD.md`
 
 ---

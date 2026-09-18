@@ -1,5 +1,12 @@
 """KB 資料存取(一顆腦改版後瘦身,規格 §6)。
 
+知識有**兩個根**(2026-09-15 起,見 ADR「知識根從一個變兩個」):
+  1. 說明中心文章(_load_kb_index)＝權威知識,「我們現在願意講的話」。
+  2. HiSupport 對話語料(_load_corpus_index)＝**次級**知識,「某個客服講過的話」。
+兩者在分診腦的系統指令裡分區塊呈現,衝突以權威知識為準(規則寫在 prompts/brain_system.txt)。
+這裡只負責「讀得到」,優先級不在這層實作——v8 是一顆腦一次決定,挑完就進寫手,
+中間沒有可以插手降權的名次,所以優先級只能寫在給腦看的指令裡。
+
 v7 的 LLM 挑文站 index_articles() 已裁——挑文職責併入分診腦(nodes/brain.py)。
 本模組只留「讀索引/讀文章檔」的純程式函式,供 brain(組索引卡/驗證編號)與
 orchestrator(照編號取全文給寫手)使用。
@@ -34,11 +41,45 @@ def _load_kb_index() -> list[dict]:
     return []
 
 
+@lru_cache(maxsize=1)
+def _load_corpus_index() -> list[dict]:
+    """對話語料索引卡(次級知識根)。未接 HiSupport＝空清單,行為與過去完全相同。"""
+    from core import corpus_remote
+
+    return corpus_remote.load_corpus_index()
+
+
+def all_valid_ids() -> set[str]:
+    """分診腦能合法挑的所有編號＝兩個知識根的聯集(幻覺編號白名單驗證用)。"""
+    return {k["id"] for k in _load_kb_index()} | {c["id"] for c in _load_corpus_index()}
+
+
 def load_kb_article(article_id: str) -> dict | None:
-    """讀取文章全文。hs_ 前綴=遠端文章:內文讀 data/kb_remote/ 的純內文檔,
+    """讀取文章全文。hsc_ 前綴=對話語料:內文讀 CORPUS_DIR 的逐字檔,中繼資料以語料索引為權威;
+    hs_ 前綴=遠端文章:內文讀 data/kb_remote/ 的純內文檔,
     title/category/url/verbatim 一律以 JSON 索引為權威(不靠 front matter,免標題含 '---' 解析錯位)。
     其餘=本地 data/kb/:照舊解析 front matter + 內文。"""
-    from core import kb_remote
+    from core import corpus_remote, kb_remote
+
+    if article_id.startswith(corpus_remote.CORPUS_PREFIX):
+        meta = corpus_remote.corpus_meta(article_id)
+        if not meta:
+            logger.warning("語料索引無此段(可能已取消勾選或對話被重開):%s", article_id)
+            return None
+        path = Path(os.getenv("CORPUS_DIR", "data/corpus")) / f"{article_id}.md"
+        if not path.exists():
+            logger.warning("語料逐字檔不存在:%s", path)
+            return None
+        return {
+            "id": article_id,
+            "title": meta.get("title", ""),
+            "category": meta.get("category", ""),
+            # url 恆為 None:語料沒有公開頁,也不該出現在給訪客看的參考連結裡。
+            "url": None,
+            # 語料永遠不照答——「一字不改」是給人工審過的標準答案用的。
+            "verbatim": False,
+            "content": path.read_text(encoding="utf-8").strip(),
+        }
 
     if article_id.startswith(kb_remote.REMOTE_PREFIX):
         meta = kb_remote.remote_meta(article_id)

@@ -11,4 +11,15 @@ data/conversations.json
 
 data/_exam_report_latest.txt
 data/_replay_report_latest.txt
+data/_multiintent_report_latest.txt
 data/_server_log.txt
+
+# 說明中心文章(由 HiSupport 同步產生的落地檔,不進版控——正式機各自重建,進版控只會互相覆蓋)
+data/kb_remote/
+data/kb_remote_index.json
+data/kb_remote_state.json
+
+# 對話語料(由 HiSupport 同步產生的落地檔,不進版控)
+data/corpus/
+data/corpus_index.json
+data/corpus_state.json
