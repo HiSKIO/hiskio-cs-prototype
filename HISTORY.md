@@ -2,6 +2,12 @@
 
 每次重要更新（KB Review、規格升級、架構調整）追加在最上方。
 
+## 2026-09-29 — /api/billing 加每期重置欄位（HIS-909，給 HiSupport「本月剩餘」面板）
+- 查詢網址改 OpenRouter `/api/v1/key`（官方文件現在只列這個）；既有欄位不動，新增原封轉傳 `limit_reset`／`limit_remaining_usd`／`usage_daily_usd`／`usage_weekly_usd`／`usage_monthly_usd` 與 `fetched_at`（查詢當下 UTC，快取命中回當時值）。HiBot 不換算，本期用量／剩餘／重置時間全由 HiSupport 算。
+- `limit_reset` OpenRouter 有回才帶（null＝永不重置照帶）；沒回不帶，免得 HiSupport 誤判成「永不重置」。OpenRouter 回 200 但沒 `usage` → 502，不再冒充「累計 $0」。
+- 規格：HiSupport `docs/2026-09-29-hibot-billing-monthly-design.md` §3。驗證：pytest 新增 14 顆（假 OpenRouter 回應），`pytest tests` 168 綠（**要指定 `tests`**：不指定會把 `scripts/run_multiintent_test.py` 收進來、它改寫 stdout 讓 pytest 崩）；本機端到端（真 HiBot 只換掉 OpenRouter 連線 → 本機 HiSupport PR #32 面板）顯示「本月剩餘 $1.80」，OpenRouter 沒回 `limit_reset` 時退回「累計」。**真實回應格式待 Adam 合併前用正式金鑰確認。**
+- 順帶查明（這次未改）：模型呼叫失敗（含額度用完 402）時 `/api/chat` 回 200＋「聽不懂」、第 3 則才問轉真人。修法提案見 HiSupport `DECISIONS_PENDING.md` D13。
+
 ## 2026-07-17 — 圖片三件套：讀圖員（vision role）＋sources_all（測試間）
 - **讀圖員**（契約 2026-07-17b）：`/api/chat` 新收 `image_urls[]`；`nodes/vision.py` 自抓圖（3 張/輪、6MB、8 秒逾時）轉 base64 → 新 role `vision`（google/gemini-2.5-flash-lite，OpenRouter 同一把金鑰）出文字描述 → 併進 user_message 交原分診腦——**決策與寫手完全不動，讀圖員只當翻譯**。讀圖失敗＝附註「無法讀取」照常走文字流程（本機實撞驗證：URL 壞掉時機器人正常轉真人並提及截圖）。訊息可空（有圖即可）。
 - **sources_all**：回應新增本輪實際用到的全部文章（id/title/hidden，含隱藏篇無網址），給 HiSupport 後台測試間顯示引用；訪客端由 HiSupport 中介不外流。
