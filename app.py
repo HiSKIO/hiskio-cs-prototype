@@ -267,16 +267,27 @@ def kb_refresh():
 # 金鑰用量快取（5 分鐘）：後台面板每次開頁都會問，別讓它變成對 OpenRouter 的輪詢
 _billing_cache: dict = {"at": 0.0, "data": None}
 
+# 每期重置欄位（HIS-909）：OpenRouter /api/v1/key 原值轉傳，HiBot 不換算——
+# 本期用量／剩餘／重置時間全由 HiSupport 算（HiSupport docs/2026-09-29-hibot-billing-monthly-design.md §3）
+_BILLING_PASSTHROUGH = {
+    "limit_remaining_usd": "limit_remaining",  # 已算進重置的剩餘；null=無上限
+    "usage_daily_usd": "usage_daily",          # 本 UTC 日
+    "usage_weekly_usd": "usage_weekly",        # 本 UTC 週（週一起）
+    "usage_monthly_usd": "usage_monthly",      # 本 UTC 月
+}
+
 
 @app.get("/api/billing")
 def billing():
-    """HiBot 自己這支 OpenRouter 金鑰的用量（給 HiSupport 後台「連線狀態」面板顯示花費）。
+    """HiBot 自己這支 OpenRouter 金鑰的用量（給 HiSupport 後台 AI 代理設定頁「金鑰用量」面板）。
 
-    只查「本金鑰」的 limit/usage（OpenRouter /api/v1/auth/key），不是整個帳戶——
+    只查「本金鑰」的 limit/usage（OpenRouter /api/v1/key），不是整個帳戶——
     帳戶下還有其他專案的金鑰，各算各的（Adam 2026-07-17 拍板）。
+    金鑰設「上限＋每期重置」時，HiSupport 靠 limit_reset＋usage_{週期}_usd 算本期剩餘（HIS-909）。
     """
     import time as _time
     import urllib.request as _rq
+    from datetime import datetime, timezone
 
     now = _time.time()
     if _billing_cache["data"] is not None and now - _billing_cache["at"] < 300:
@@ -287,7 +298,7 @@ def billing():
         raise HTTPException(status_code=409, detail="未設定 OPENROUTER_API_KEY")
     try:
         req = _rq.Request(
-            "https://openrouter.ai/api/v1/auth/key",
+            "https://openrouter.ai/api/v1/key",
             headers={"Authorization": f"Bearer {api_key}"},
         )
         with _rq.urlopen(req, timeout=10) as r:
@@ -296,13 +307,26 @@ def billing():
         logger.warning("OpenRouter 用量查詢失敗:%s", e)
         raise HTTPException(status_code=502, detail="OpenRouter 用量查詢失敗") from e
 
+    # 200 但沒有用量內容＝查不到：回 502，不拿 0 冒充「累計 $0」（兩端 log 都看得出斷在哪）
+    if not isinstance(data, dict) or data.get("usage") is None:
+        logger.warning("OpenRouter 用量回應缺 usage:%r", data)
+        raise HTTPException(status_code=502, detail="OpenRouter 用量回應缺資料")
+
     out = {
         "provider": "openrouter",
         "scope": "key",  # 本金鑰,非整個帳戶
         "limit_usd": data.get("limit"),  # null=無上限
-        "usage_usd": round(float(data.get("usage") or 0.0), 4),
+        "usage_usd": round(float(data.get("usage") or 0.0), 4),  # 累計
         "remaining_usd": data.get("limit_remaining"),
+        **{ours: data.get(theirs) for ours, theirs in _BILLING_PASSTHROUGH.items()},
+        # 實際去問 OpenRouter 的時刻；快取命中時回這個值、不換成現在（面板「資料時間」）
+        "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
+    # limit_reset：OpenRouter 有回才帶（null=上限永不重置，照帶）；沒回就不帶——
+    # 補成 null 會被 HiSupport 當成「永不重置」拿累計比上限；不帶則退回只顯示累計
+    if "limit_reset" in data:
+        out["limit_reset"] = data["limit_reset"]
+
     _billing_cache["at"] = now
     _billing_cache["data"] = out
     return out
